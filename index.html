@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Web Serial API - Latest Result</title>
+</head>
+<body>
+    <h3>Web Serial API｜最新の受信データ（タイムスタンプ付き）</h3>
+    <button onclick="startSerial()">接続</button>
+    <button onclick="stopSerial()">切断</button>
+
+    <h4>最新の受信データ:</h4>
+    <p id="serial-output" style="border: 1px solid #ccc; padding: 10px; min-height: 1.5em; font-family: monospace;"></p>
+
+    <script>
+        let port;
+        let reader;
+        let readableStreamClosed;
+        let keepReading = true;
+
+        // 受信したデータを改行コードで区切って1行ずつに変換するための補助クラス
+        class LineBreakTransformer {
+            constructor() {
+                this.container = '';
+            }
+            transform(chunk, controller) {
+                this.container += chunk;
+                const lines = this.container.split('\r\n');
+                this.container = lines.pop();
+                lines.forEach(line => controller.enqueue(line));
+            }
+            flush(controller) {
+                controller.enqueue(this.container);
+            }
+        }
+
+        async function startSerial() {
+            try {
+                port = await navigator.serial.requestPort();
+                await port.open({ baudRate: 9600 });
+                console.log("INFO: 接続が確立しました");
+                
+                document.getElementById("serial-output").textContent = "接続待機中...";
+                keepReading = true;
+                readUntilClosed();
+
+            } catch (error) {
+                console.log("ERROR: ポートが開けません", error);
+            }
+        }
+
+        async function readUntilClosed() {
+            const outputArea = document.getElementById("serial-output");
+
+            // ストリームを準備
+            const textDecoder = new TextDecoderStream();
+            readableStreamClosed = port.readable.pipeTo(textDecoder.writable);
+            const reader = textDecoder.readable
+                .pipeThrough(new TransformStream(new LineBreakTransformer()))
+                .getReader();
+
+            // 読み取りループ
+            while (port.readable && keepReading) {
+                try {
+                    const { value, done } = await reader.read();
+                    if (done) {
+                        break;
+                    }
+                    if (value) { // 空の行は無視
+                        // 現在時刻を取得
+                        const timestamp = new Date().toLocaleTimeString('ja-JP');
+                        // 表示するテキストを作成
+                        const displayText = `${timestamp}: ${value}`;
+                        // 画面上の表示エリアのテキストを「置き換え」
+                        outputArea.textContent = displayText;
+                    }
+                } catch (error) {
+                    console.error("ERROR: 読み出し中にエラーが発生しました", error);
+                    break;
+                }
+            }
+        }
+
+        async function stopSerial() {
+            keepReading = false;
+            if (reader) {
+                try {
+                    await reader.cancel();
+                } catch (error) {
+                    console.error("Reader cancel error", error);
+                }
+            }
+            if (readableStreamClosed) {
+                 await readableStreamClosed.catch(() => {}); // ストリームを閉じるのを待つ
+            }
+            if (port) {
+                await port.close();
+                console.log("INFO: 接続を切断しました");
+                document.getElementById("serial-output").textContent = "切断しました";
+            }
+        }
+    </script>
+</body>
+</html>
